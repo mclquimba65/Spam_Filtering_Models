@@ -1,5 +1,6 @@
+# Model Built By Mark Clayton Quimba
+
 import numpy as np
-import pandas as pd
 from collections import defaultdict, Counter
 
 class Custom_Markov_Model:
@@ -10,10 +11,7 @@ class Custom_Markov_Model:
 
     def build_model_markov(self):
         X_tokens_flat = [token for email_tokens in self.X for token in email_tokens]
-
-        token_frequencies = Counter(X_tokens_flat)
-
-        vocabulary = set(token for token in token_frequencies)
+        vocabulary = set(token for token in X_tokens_flat)
         vocabulary.add("<UNDEFINED>")
 
         spam_bigram_count = defaultdict(Counter)
@@ -25,7 +23,6 @@ class Custom_Markov_Model:
         # Add comment
         for i in range(len(self.X)):
             email_tokenized = self.X[i]
-            email_tokenized = [token if token in vocabulary else '<UNDEFINED>' for token in email_tokenized]
             label = self.y[i]
 
             if label == 1:
@@ -54,8 +51,7 @@ class Custom_Markov_Model:
     def X_given_y(self, email_tokenized, alpha=1):
         # Equation of P(X_0=w_0 | Y=y) = (count(w_0,Y) + alpha) / (count(X,Y) + alpha(Vocabulary))
         # Equation of P(X_(n+1)=w_(n+1) | X_n=w_n,Y=y) = (count(w_n -> w_(n+1), Y) + alpha) / (count(X_n -> X_(n+1), Y) + alpha(Vocabulary))
-        email_tokenized_copy = email_tokenized
-        email_tokenized_copy = [token if token in self.model["vocabulary"] else '<UNDEFINED>' for token in email_tokenized_copy]
+        email_tokenized_copy = [token if token in self.model['vocabulary'] else "<UNDEFINED>" for token in email_tokenized]
         first_word = email_tokenized_copy[0]
         Xgiveny = {}
 
@@ -79,11 +75,11 @@ class Custom_Markov_Model:
             # Calculate probability of the transition with applied laplace smoothing of alpha=1 by default
             # Take the log of this probability
             # Add to log summation of next given current
-            for i in range(len(email_tokenized) - 1):
-                current_word = email_tokenized[i]
-                next_word = email_tokenized[i + 1]
-                bigram_total = sum(self.model[cls]['bigram'][current_word].values())
-                bigram_count = self.model[cls]['bigram'][current_word].get(next_word, 0)
+            for i in range(len(email_tokenized_copy) - 1):
+                current_word = email_tokenized_copy[i]
+                next_word = email_tokenized_copy[i + 1]
+                bigram_total = sum(self.model[cls]['bigram'].get(current_word, {}).values())
+                bigram_count = self.model[cls]['bigram'].get(current_word, {}).get(next_word, 0)
                 bigram_prob = (bigram_count + alpha) / (bigram_total + (alpha * len(self.model['vocabulary'])))
                 log_bigram_prob_summation += np.log(bigram_prob)
 
@@ -102,26 +98,26 @@ class Custom_Markov_Model:
 
         return log_y_prior_spam, log_y_prior_no_spam
     
-    def yhat_classify(self):
+    def yhat_classify(self, X):
         # For each email use yhat equation and predict
         yhat_vector = []
 
-        spam_y_prior, no_spam_y_prior = self.y_prior()
+        log_spam_y_prior, log_no_spam_y_prior = self.y_prior()
 
-        for i in range(len(self.X)):
-            spam_Xgiveny, no_spam_Xgiveny = self.X_given_y(self.X[i])
+        for i in range(len(X)):
+            log_spam_Xgiveny, log_no_spam_Xgiveny = self.X_given_y(X[i])
 
-            yhat_spam = spam_y_prior + spam_Xgiveny
-            yhat_no_spam = no_spam_y_prior + no_spam_Xgiveny
+            yhat_spam = log_spam_y_prior + log_spam_Xgiveny
+            yhat_no_spam = log_no_spam_y_prior + log_no_spam_Xgiveny
 
             yhat_vector.append(1 if yhat_spam > yhat_no_spam else 0)
 
         return yhat_vector
 
-    def classification_error(self, yhat):
+    def classification_error(self, yhat, ytruth):
         error = 0
         for i in range(len(yhat)):
-            if yhat[i] != self.y[i]:
+            if yhat[i] != ytruth[i]:
                 error += 1
 
         error_prob = error / len(yhat)
@@ -152,3 +148,45 @@ class Custom_Markov_Model:
             bigram_count[cls]['sorted'] = [bigram_count[cls]['bigram'][i] for i in sorted_indexes]
 
         return bigram_count['spam']['sorted'], bigram_count['no_spam']['sorted']
+    
+    def bigrams_high_to_low_ratio(self, alpha=1):
+        bigrams_high_to_low = {
+            "spam": {
+                "bigram_prob": [],
+                "bigram_ratio": [],
+                "sorted": None
+            },
+            "no_spam": {
+                "bigram_prob": [],
+                "bigram_ratio": [],
+                "sorted": None
+            }
+        }
+
+        vocab_size = len(self.model['vocabulary'])
+        observed_bigrams_set = set()
+
+        for cls in ("spam", "no_spam"):
+            for current_word, counter in self.model[cls]['bigram'].items():
+                for next_word in counter:
+                    observed_bigrams_set.add((current_word, next_word))
+
+        observed_bigrams = list(observed_bigrams_set)
+
+        for cls in ("spam", "no_spam"):
+            for current_word, next_word in observed_bigrams:
+                bigram_count = self.model[cls]['bigram'].get(current_word, {}).get(next_word, 0)
+                bigram_total = sum(self.model[cls]['bigram'].get(current_word, {}).values())
+                bigram_prob = (bigram_count + alpha) / (bigram_total + (alpha * vocab_size))
+
+                bigrams_high_to_low[cls]['bigram_prob'].append(bigram_prob)
+
+        for i in range(len(observed_bigrams)):
+            bigrams_high_to_low['spam']['bigram_ratio'].append((bigrams_high_to_low['spam']['bigram_prob'][i]) / (bigrams_high_to_low['no_spam']['bigram_prob'][i]))
+            bigrams_high_to_low['no_spam']['bigram_ratio'].append((bigrams_high_to_low['no_spam']['bigram_prob'][i]) / (bigrams_high_to_low['spam']['bigram_prob'][i]))
+
+        for cls in ("spam", "no_spam"):
+            sorted_indexes = np.argsort(bigrams_high_to_low[cls]['bigram_ratio'])[::-1]
+            bigrams_high_to_low[cls]['sorted'] = [observed_bigrams[i] for i in sorted_indexes]
+
+        return bigrams_high_to_low['spam']['sorted'], bigrams_high_to_low['no_spam']['sorted']
